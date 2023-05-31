@@ -1,6 +1,7 @@
 from DECD_pulseV3 import *
 from qutip import *
 import numpy as np
+import h5py as hf
 
 #V3: changed how angles are loaded 
 #V4: Adding time dependence to collapse operator decay rates
@@ -107,21 +108,36 @@ class ecd_pulse_two_mode:
         '''
         Loads betas, thetas, phis
         '''
-        params = np.loadtxt(self.param_file)
-        
-        if np.ndim(params) == 1: 
-            self.betas = np.asarray([complex(params[0], params[1])])
-            self.gammas =  np.asarray([complex(params[2], params[3])])
-            self.phis = np.asarray(params[4])
-            self.thetas = np.asarray(params[5])
-        else:
-            
-            self.betas = np.asarray([complex(params[0][i], params[1][i]) for i in range(len(params[0]))])
-            self.gammas =  np.asarray([complex(params[2][i], params[3][i]) for i in range(len(params[0]))])
-            self.phis = params[4]
-            self.thetas = params[5]
-        return None
+
     
+        if '.txt' in self.param_file: 
+            params = np.loadtxt(self.param_file)
+
+            if np.ndim(params) == 1: 
+                self.betas = np.asarray([complex(params[0], params[1])])
+                self.gammas =  np.asarray([complex(params[2], params[3])])
+                self.phis = np.asarray(params[4])
+                self.thetas = np.asarray(params[5])
+            else:
+                self.betas = np.asarray([complex(params[0][i], params[1][i]) for i in range(len(params[0]))])
+                self.gammas =  np.asarray([complex(params[2][i], params[3][i]) for i in range(len(params[0]))])
+                self.phis = params[4]
+                self.thetas = params[5]
+
+        elif '.h5' in self.param_file: 
+            #params = np.loadtxt(self.param_file)
+            filename = self.param_file
+            file = hf.File(filename, "r")
+            timestamp = list(file.keys())[-1]
+            fids = file[timestamp]['fidelities'][-1]
+            print('fidelity for h5 param is ' + str(max(fids)))
+            best_fid_idx = np.argmax(fids)
+            self.betas = file[timestamp]['betas'][-1][best_fid_idx]
+            self.gammas = file[timestamp]['gammas'][-1][best_fid_idx]
+            self.phis = file[timestamp]['phis'][-1][best_fid_idx]
+            self.thetas = file[timestamp]['thetas'][-1][best_fid_idx]
+        return None
+
     def get_pulses(self): 
         '''
         Evaluates cavity and qubit pulses for the desired ECD simulation

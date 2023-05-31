@@ -219,7 +219,7 @@ class multimode_circle_grape_optimal_control:
         pulses = self.return_pulses(filename)
         fig, ax = plt.subplots(nrows=1, figsize=(14,4))
         if plot_cavity:end=4
-        else:end = len(self.controlHs)
+        else:end = len(self.controlHs())
         labels = ["Qubit_ge_x","Qubit_ge_y","Qubit_ef_x","Qubit_ef_y", "Cavity_x","Cavity_y"] 
         for ii,x in enumerate(pulses[:end]):
             ax.plot(self.tlist/1e3,x,label = labels[ii] )
@@ -480,6 +480,7 @@ class multimode_circle_grape_optimal_control:
             filename = self.filename
         ss = np.zeros(self.qnum*(self.mnum)**self.mmnum,dtype=complex)
         ss[:len(start_state)] = start_state  # g0
+        print(ss[:len(start_state)])
         psi0 = Qobj(ss)
         rho0 = psi0*psi0.dag()
         
