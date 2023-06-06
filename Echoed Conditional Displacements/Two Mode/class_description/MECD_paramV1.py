@@ -49,6 +49,7 @@ class BatchOptimizer(VisualizationMixin):
         phi_mask=None,
         theta_mask=None,
         final_disp_mask=None,
+        BCH_approx = True,
         name="ECD_control",
         filename=None,
         comment="",
@@ -64,6 +65,7 @@ class BatchOptimizer(VisualizationMixin):
             "term_fid": term_fid,
             "dfid_stop": dfid_stop,
             "no_CD_end": no_CD_end,
+            "BCH_approx": BCH_approx,
             "learning_rate": learning_rate,
             "epoch_size": epoch_size,
             "epochs": epochs,
@@ -105,8 +107,8 @@ class BatchOptimizer(VisualizationMixin):
             self.target_states_dag = tf.linalg.adjoint(
                 self.target_states
             )  # store dag to avoid having to take adjoint
-
-            N_cav = self.initial_states[0].numpy().shape[0] // 2
+            print(N_cav)
+            N_cav = N_cav#self.initial_states[0].numpy().shape[0] // 2
         elif self.parameters["optimization_type"] == "unitary":
             self.target_unitary = tfq.qt2tf(target_unitary)
             N_cav = self.target_unitary.numpy().shape[0] // 2
@@ -132,6 +134,7 @@ class BatchOptimizer(VisualizationMixin):
         self.randomize_and_set_vars()
 
         self._construct_needed_matrices()
+
         self._construct_optimization_masks(beta_mask, final_disp_mask, phi_mask,theta_mask)
 
         # opt data will be a dictionary of dictonaries used to store optimization data
@@ -175,16 +178,77 @@ class BatchOptimizer(VisualizationMixin):
         )
         self.__init__(**parameters)
 
+    def multimode_baby_matrices(self, tensor_mat, mode_idx):
+        '''
+        Helper function for construct_needed_matrices()
+        
+        Input: Matrix for specified mode, mode_index is between 0 and total modes-2
+        Output: Tensor product above matrix with identity for other modes
+        '''
+        full_tensor_mat = None
+      
+            
+        operator_mode = tf.linalg.LinearOperatorFullMatrix(tensor_mat.numpy())
+        operator_id = tf.linalg.LinearOperatorFullMatrix((self.identity).numpy())
+        op_sequence = [operator_id for j in range(mode_idx)] + [operator_mode] + [operator_id for j in range(self.parameters['N_modes'] -1 -mode_idx)]
+        tensor_prod = tf.linalg.LinearOperatorKronecker(op_sequence)
+        #print('oi')
+        #print(mode_idx)
+        return tf.cast((tensor_prod.to_dense()).numpy(), dtype = tf.complex64)
+       
+    
+
     def _construct_needed_matrices(self):
+        '''
+        EG: assuming all modes have same dimensions
+        '''
         N_cav = self.parameters["N_cav"]
         q = tfq.position(N_cav)
         p = tfq.momentum(N_cav)
+        a = tfq.destroy(N_cav)
+        adag = tfq.create(N_cav)
+        self.identity = tfq.identity(N_cav)
+        self.identity_mm = self.multimode_baby_matrices(self.identity, 0)
 
-        # Pre-diagonalize
-        (self._eig_q, self._U_q) = tf.linalg.eigh(q)
-        (self._eig_p, self._U_p) = tf.linalg.eigh(p)
+        # Pre-diagonalize and listify
+        self.a_mm = []
+        self.adag_mm = []
+        self._eig_q_mm = []
+        self._eig_p_mm = []
+        self._U_q_mm = []
+        self._U_p_mm = []
+        self._qp_comm_mm = []
 
-        self._qp_comm = tf.linalg.diag_part(q @ p - p @ q)
+        for mode_idx in range(self.parameters['N_modes']):
+            q_m = self.multimode_baby_matrices( q, mode_idx)
+            p_m = self.multimode_baby_matrices( p, mode_idx)
+            a_m = self.multimode_baby_matrices( a, mode_idx)
+            adag_m = self.multimode_baby_matrices( adag, mode_idx)
+            
+            (eig_q, U_q) = tf.linalg.eigh(q_m)
+            (eig_p, U_p) = tf.linalg.eigh(p_m)
+            qp_comm = tf.linalg.diag_part(q_m @ p_m - p_m @ q_m)
+
+            self._eig_q_mm.append(eig_q)
+            self._eig_p_mm.append(eig_p)
+            self._U_q_mm.append(U_q)
+            self._U_p_mm.append(U_p)
+            self._qp_comm_mm.append(qp_comm)
+            self.a_mm.append(a_m)
+            self.adag_mm.append(adag_m)
+
+        #listify (for all modes)
+        # self.a_mm = [self.multimode_baby_matrices( a, mode_idx) 
+        #                 for mode_idx in range(self.parameters['N_modes'])]
+        # self.adag_mm = [self.multimode_baby_matrices( adag, mode_idx) 
+        #                 for mode_idx in range(self.parameters['N_modes'])]
+        # self._U_q_mm = [self.multimode_baby_matrices( self._U_q, mode_idx) 
+        #                 for mode_idx in range(self.parameters['N_modes'])]
+        # self._U_p_mm = [self.multimode_baby_matrices( self._U_p, mode_idx) 
+        #                 for mode_idx in range(self.parameters['N_modes'])]
+
+        # self._qp_comm_mm = [self.multimode_baby_matrices(self._qp_comm, mode_idx) 
+        #                 for mode_idx in range(self.parameters['N_modes'])]
 
         if self.parameters["optimization_type"] == "unitary":
             P_cav = self.parameters["P_cav"]
@@ -199,7 +263,7 @@ class BatchOptimizer(VisualizationMixin):
     ):
         if beta_mask is None:
             beta_mask = np.ones(
-                shape=(self.parameters["N_blocks"], self.parameters['N_modes'], self.parameters["N_multistart"]),
+                shape=(self.parameters['N_modes'], self.parameters["N_blocks"], self.parameters["N_multistart"]),
                 dtype=np.float32,
             )
             if self.parameters["no_CD_end"]:
@@ -219,7 +283,7 @@ class BatchOptimizer(VisualizationMixin):
             )
         if phi_mask is None:
             phi_mask = np.ones(
-                shape=(self.parameters["N_blocks"], self.parameters['N_modes'],self.parameters["N_multistart"]),
+                shape=(self.parameters['N_modes'], self.parameters["N_blocks"], self.parameters["N_multistart"]),
                 dtype=np.float32,
             )
         else:
@@ -228,7 +292,7 @@ class BatchOptimizer(VisualizationMixin):
             )
         if theta_mask is None:
             theta_mask = np.ones(
-                shape=(self.parameters["N_blocks"], self.parameters['N_modes'], self.parameters["N_multistart"]),
+                shape=( self.parameters['N_modes'], self.parameters["N_blocks"], self.parameters["N_multistart"]),
                 dtype=np.float32,
             )
         else:
@@ -241,7 +305,7 @@ class BatchOptimizer(VisualizationMixin):
         self.theta_mask = theta_mask
 
     @tf.function
-    def batch_construct_displacement_operators(self, alphas, mode):
+    def batch_construct_displacement_operators(self, alphas, mode_idx):
 
         # Reshape amplitudes for broadcast against diagonals
         sqrt2 = tf.math.sqrt(tf.constant(2, dtype=tf.complex64))
@@ -255,21 +319,32 @@ class BatchOptimizer(VisualizationMixin):
         )
 
         # Exponentiate diagonal matrices
-        expm_q = tf.linalg.diag(tf.math.exp(1j * im_a * self._eig_q))
-        expm_p = tf.linalg.diag(tf.math.exp(-1j * re_a * self._eig_p))
-        expm_c = tf.linalg.diag(tf.math.exp(-0.5 * re_a * im_a * self._qp_comm))
+        expm_q = tf.linalg.diag(tf.math.exp(1j * im_a * self._eig_q_mm[mode_idx]))
+        expm_p = tf.linalg.diag(tf.math.exp(-1j * re_a * self._eig_p_mm[mode_idx]))
+        expm_c = tf.linalg.diag(tf.math.exp(-0.5 * re_a * im_a * self._qp_comm_mm[mode_idx]))
 
         # Apply Baker-Campbell-Hausdorff
-        return tf.cast(
-            self._U_q
-            @ expm_q
-            @ tf.linalg.adjoint(self._U_q)
-            @ self._U_p
-            @ expm_p
-            @ tf.linalg.adjoint(self._U_p)
-            @ expm_c,
-            dtype=tf.complex64,
-        )
+        if self.parameters['BCH_approx']:
+            D_mode =  tf.cast(
+                self._U_q_mm[mode_idx]
+                @ expm_q
+                @ tf.linalg.adjoint(self._U_q_mm[mode_idx])
+                @ self._U_p_mm[mode_idx]
+                @ expm_p
+                @ tf.linalg.adjoint(self._U_p_mm[mode_idx])
+                @ expm_c,
+                dtype=tf.complex64,
+            )
+        else: #exact form (at least exact up to under-the-hood-tensorflow standard)
+            alphas_star = tf.math.conj(alphas)
+            exponent = tf.einsum('ij,kl->ijkl', alphas, self.adag_mm[mode_idx]) - tf.einsum('ij,kl->ijkl', alphas_star, self.a_mm[mode_idx])
+            D_mode = tf.linalg.expm(exponent)
+        # print('ho')
+        # print(self.ad.shape)
+
+        return D_mode
+
+
 
     @tf.function
     def batch_construct_singlemode_block_operators(
@@ -292,7 +367,7 @@ class BatchOptimizer(VisualizationMixin):
         # )
 
         #ds_end = self.batch_construct_displacement_operators(D)
-        ds_end = self.modes_identity
+        #ds_end = self.identity_mm
         ds_g = self.batch_construct_displacement_operators(Bs, mode)
         ds_e = tf.linalg.adjoint(ds_g)
 
@@ -315,8 +390,8 @@ class BatchOptimizer(VisualizationMixin):
 
         # constructing the blocks of the matrix
         ul = cos * ds_g
-        ll = exp * sin * ds_e
-        ur = tf.constant(-1, dtype=tf.complex64) * exp_dag * sin * ds_g
+        ll = tf.constant(-1j, dtype=tf.complex64)* exp * sin * ds_e
+        ur = tf.constant(-1j, dtype=tf.complex64) * exp_dag * sin * ds_g
         lr = cos * ds_e
 
         # without pi pulse, block matrix is:
@@ -327,20 +402,22 @@ class BatchOptimizer(VisualizationMixin):
         # (ul, ur)
         # pi pulse also adds -i phase, however don't need to trck it unless using multiple oscillators.a
         # append a final block matrix with a single displacement in each quadrant
-        blocks = tf.concat(
-            [
-                -1j * tf.concat([tf.concat([ll, lr], 3), tf.concat([ul, ur], 3)], 2),
-                tf.concat(
-                    [
-                        tf.concat([ds_end, tf.zeros_like(ds_end)], 3),
-                        tf.concat([tf.zeros_like(ds_end), ds_end], 3),
-                    ],
-                    2,
-                ),
-            ],
-            0,
-        )
-        return blocks
+        # blocks = tf.concat(
+        #     [
+        #         -1j * tf.concat([tf.concat([ll, lr], 3), tf.concat([ul, ur], 3)], 2),
+        #         tf.concat(
+        #             [
+        #                 tf.concat([ds_end, tf.zeros_like(ds_end)], 3),
+        #                 tf.concat([tf.zeros_like(ds_end), ds_end], 3),
+        #             ],
+        #             2,
+        #         ),
+        #     ],
+        #     0,
+        # )
+        #EG:need to think about the prefactor here -1j
+        #return tf.concat([tf.concat([ul, ur], 3), tf.concat([ll, lr], 3)], 2)
+        return tf.concat([tf.concat([ll, lr], 3), tf.concat([ul, ur], 3)], 2)
     
     @tf.function
     def batch_construct_multimode_block_operators(
@@ -353,11 +430,15 @@ class BatchOptimizer(VisualizationMixin):
         '''
         #compute single mode blocks
         modes_blocks = []
-        for mode in range(self.parameters["N_modes"]):
+        for mode in range(0,self.parameters["N_modes"]):
             mode_blocks = self.batch_construct_singlemode_block_operators(betas_rho[mode], betas_angle[mode], phis[mode], thetas[mode], mode) 
-            modes_blocks.append(mode_blocks)
+            #above var contains all the layers for a specific mode
+            modes_blocks.append(mode_blocks) 
+
         #combines single mode blocks
         mm_blocks = modes_blocks[0] 
+        # print('ho')
+        # print(mode_blocks.shape)
         for mode in range(1, self.parameters["N_modes"]): 
             mm_blocks = tf.einsum(
                 "lmij, lmjk -> lmik", 
@@ -399,8 +480,11 @@ class BatchOptimizer(VisualizationMixin):
     def batch_state_transfer_fidelities(
         self, betas_rho, betas_angle, final_disp_rho, final_disp_angle, phis, thetas
     ):
-        bs = self.batch_construct_block_operators(
-            betas_rho, betas_angle, final_disp_rho, final_disp_angle, phis, thetas
+        # EG: I'm just gonna ignore this final disp angle
+        bs = self.batch_construct_multimode_block_operators(
+            betas_rho, betas_angle,
+            final_disp_rho, final_disp_angle, 
+            phis, thetas
         )
         psis = tf.stack([self.initial_states] * self.parameters["N_multistart"])
         for U in bs:
@@ -417,26 +501,26 @@ class BatchOptimizer(VisualizationMixin):
 
     # here, including the relative phase in the cost function by taking the real part of the overlap then squaring it.
     # need to think about how this is related to the fidelity.
-    @tf.function
-    def batch_state_transfer_fidelities_real_part(
-        self, betas_rho, betas_angle, final_disp_rho, final_disp_angle, phis, thetas
-    ):
-        bs = self.batch_construct_block_operators(
-            betas_rho, betas_angle, final_disp_rho, final_disp_angle, phis, thetas
-        )
-        psis = tf.stack([self.initial_states] * self.parameters["N_multistart"])
-        for U in bs:
-            psis = tf.einsum(
-                "mij,msjk->msik", U, psis
-            )  # m: multistart, s:multiple states
-        overlaps = self.target_states_dag @ psis  # broadcasting
-        overlaps = tf.reduce_mean(tf.math.real(overlaps), axis=1)
-        overlaps = tf.squeeze(overlaps)
-        # squeeze after reduce_mean which uses axis=1,
-        # which will not exist if squeezed before for single state transfer
-        # don't need to take the conjugate anymore
-        fids = tf.cast(overlaps * overlaps, dtype=tf.float32)
-        return fids
+    # @tf.function
+    # def batch_state_transfer_fidelities_real_part(
+    #     self, betas_rho, betas_angle, final_disp_rho, final_disp_angle, phis, thetas
+    # ):
+    #     bs = self.batch_construct_block_operators(
+    #         betas_rho, betas_angle, final_disp_rho, final_disp_angle, phis, thetas
+    #     )
+    #     psis = tf.stack([self.initial_states] * self.parameters["N_multistart"])
+    #     for U in bs:
+    #         psis = tf.einsum(
+    #             "mij,msjk->msik", U, psis
+    #         )  # m: multistart, s:multiple states
+    #     overlaps = self.target_states_dag @ psis  # broadcasting
+    #     overlaps = tf.reduce_mean(tf.math.real(overlaps), axis=1)
+    #     overlaps = tf.squeeze(overlaps)
+    #     # squeeze after reduce_mean which uses axis=1,
+    #     # which will not exist if squeezed before for single state transfer
+    #     # don't need to take the conjugate anymore
+    #     fids = tf.cast(overlaps * overlaps, dtype=tf.float32)
+    #     return fids
 
     @tf.function
     def mult_bin_tf(self, a):
@@ -690,6 +774,7 @@ class BatchOptimizer(VisualizationMixin):
                     maxshape=(
                         None,
                         self.parameters["N_multistart"],
+                        self.parameters["N_modes"],
                         self.parameters["N_blocks"],
                     ),
                 )
@@ -706,6 +791,7 @@ class BatchOptimizer(VisualizationMixin):
                     maxshape=(
                         None,
                         self.parameters["N_multistart"],
+                        self.parameters["N_modes"],
                         self.parameters["N_blocks"],
                     ),
                 )
@@ -716,6 +802,7 @@ class BatchOptimizer(VisualizationMixin):
                     maxshape=(
                         None,
                         self.parameters["N_multistart"],
+                        self.parameters["N_modes"],
                         self.parameters["N_blocks"],
                     ),
                 )
@@ -751,12 +838,12 @@ class BatchOptimizer(VisualizationMixin):
         betas_rho = np.random.uniform(
             0,
             beta_scale,
-            size=(self.parameters["N_blocks"], self.parameters["N_multistart"]),
+            size=(self.parameters["N_modes"], self.parameters["N_blocks"], self.parameters["N_multistart"]),
         )
         betas_angle = np.random.uniform(
             -np.pi,
             np.pi,
-            size=(self.parameters["N_blocks"], self.parameters["N_multistart"]),
+            size=(self.parameters["N_modes"], self.parameters["N_blocks"], self.parameters["N_multistart"]),
         )
         if self.parameters["include_final_displacement"]:
             final_disp_rho = np.random.uniform(
@@ -768,16 +855,16 @@ class BatchOptimizer(VisualizationMixin):
         phis = np.random.uniform(
             -np.pi,
             np.pi,
-            size=(self.parameters["N_blocks"], self.parameters["N_multistart"]),
+            size=(self.parameters["N_modes"], self.parameters["N_blocks"], self.parameters["N_multistart"]),
         )
         thetas = np.random.uniform(
             -1 * theta_scale,
             theta_scale,
-            size=(self.parameters["N_blocks"], self.parameters["N_multistart"]),
+            size=(self.parameters["N_modes"], self.parameters["N_blocks"], self.parameters["N_multistart"]),
         )
-        if self.parameters["no_CD_end"]:
-            betas_rho[-1] = 0
-            betas_angle[-1] = 0
+        # if self.parameters["no_CD_end"]:
+        #     betas_rho[-1] = 0
+        #     betas_angle[-1] = 0
         self.betas_rho = tf.Variable(
             betas_rho, dtype=tf.float32, trainable=True, name="betas_rho",
         )
@@ -822,18 +909,25 @@ class BatchOptimizer(VisualizationMixin):
         thetas = self.thetas if thetas is None else thetas
 
         betas = betas_rho.numpy() * np.exp(1j * betas_angle.numpy())
+        #print('-------')
+      #  print(betas)
         final_disp = final_disp_rho.numpy() * np.exp(1j * final_disp_angle.numpy())
         phis = phis.numpy()
         thetas = thetas.numpy()
         # now, to wrap phis, etas, and thetas so it's in the range [-pi, pi]
         phis = (phis + np.pi) % (2 * np.pi) - np.pi
         thetas = (thetas + np.pi) % (2 * np.pi) - np.pi
+        #EG: im wrapping this in range [0,2pi]
+        # phis = phis  % (2 * np.pi)
+        # thetas = phis  % (2 * np.pi)
 
-        # these will have shape N_multistart x N_blocks
-        return betas.T, final_disp.T, phis.T, thetas.T
+        # current have shape N_modes x N_blocks x N_multistarts
+        # these will have shape N_multistart x N_modes x N_blocks
+        return tf.einsum("nlm->mnl", betas), final_disp.T, tf.einsum("nlm->mnl", phis), tf.einsum("nlm->mnl", thetas)
 
     def set_tf_vars(self, betas=None, final_disp=None, phis=None,thetas=None):
         # reshaping for N_multistart = 1
+        # EG: Ignore for multimode case for now
         if betas is not None:
             if len(betas.shape) < 2:
                 betas = betas.reshape(betas.shape + (1,))
