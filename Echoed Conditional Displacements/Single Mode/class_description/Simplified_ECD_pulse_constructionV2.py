@@ -596,6 +596,7 @@ def conditional_displacement_circuit(
     echo_qubit_pulses=False,
 ):
     print('Modified method: Cond Disp Circuit')
+    #print(phis)
     cavity_dac_pulse = []
     if type(thetas) is not list:
         thetas = [thetas]
@@ -680,6 +681,8 @@ def conditional_displacement_circuit(
             c_wave = (pr + 1j * pi) * np.exp(-2j * np.pi * ts * detune)
             pr, pi = np.real(c_wave), np.imag(c_wave)
         for j in range(len(thetas)):
+            #print(thetas)
+            #print(phis)
             theta = thetas[j][i]
             phi = phis[j][i]
             if not echo_qubit_pulses:
