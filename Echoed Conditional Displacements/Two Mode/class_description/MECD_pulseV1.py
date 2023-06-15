@@ -602,6 +602,7 @@ def conditional_displacement_circuit(
     '''
     Converts ECD opparams to pulse sequencies
     '''
+    #print(betas)
     #print('Modified method: Cond Disp Circuit')
     N_modes = len(storages)
     N_layers = len(betas[0])
@@ -619,7 +620,7 @@ def conditional_displacement_circuit(
     cumulative_qubit_phase = 0
     analytic_betas = []
     last_beta = 0
-    beta_sign = +1
+    beta_sign = [1 for _ in range(N_modes)]
 
     # if double_CD:
     #     betas, phis, thetas = double_circuit(betas, phis, thetas, final_disp=final_disp)
@@ -628,6 +629,7 @@ def conditional_displacement_circuit(
         for m__ in range(N_modes):
             m = N_modes - m__ -1
             
+
             #choosing appropriate parameters
             beta = betas[m][l]
             phi = phis[m][l]
@@ -738,13 +740,13 @@ def conditional_displacement_circuit(
                 for m_ in range(N_modes): 
                     cavity_dac_pulse[m_].append(np.zeros(buffer_time))  # all modes on standby
 
-            cavity_dac_pulse[m].append(beta_sign * e_cd) # ecd happening on m'th mode
+            cavity_dac_pulse[m].append(beta_sign[m] * e_cd) # ecd happening on m'th mode
             for m_ in range(N_modes):
                 if m_ is not m:  # all other modes besides m'th on standby 
                     cavity_dac_pulse[m_].append(np.zeros(len(e_cd)))  # qubit rotation happening, all modes on standby
 
             if echo_qubit_pulses:
-                beta_sign = beta_sign * -1
+                beta_sign[m] = beta_sign[m] * -1
             if buffer_time > 0 and len(qubit_dac_pulse[0]) > 0:
                 for m_ in range(N_modes): 
                     cavity_dac_pulse[m_].append(np.zeros(buffer_time))  # all modes on standby

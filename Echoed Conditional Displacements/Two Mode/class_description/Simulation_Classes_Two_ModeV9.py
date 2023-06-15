@@ -112,6 +112,11 @@ class ecd_pulse_multimode:
         self.betas = file[timestamp]['betas'][-1][best_fid_idx]
         #self.gammas = file[timestamp]['gammas'][-1][best_fid_idx]
         self.phis = file[timestamp]['phis'][-1][best_fid_idx]
+        #bug in MECD code
+        (m,n) = self.phis.shape
+        for m_ in range(m):
+            for n_ in range(n): 
+                self.phis[m_,n_] = self.phis[m_,n_] - (np.pi/2)
         self.thetas = file[timestamp]['thetas'][-1][best_fid_idx]
         return None
 

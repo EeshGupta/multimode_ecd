@@ -10,7 +10,7 @@ class ecd_pulse_single_mode:
                  param_file = None, 
                  storage_params = None, 
                  qubit_params = None, 
-                 kappa = 0.5e-6, #T1 = 2 ms
+                 kappa = 0,#0.5e-6, #T1 = 2 ms
                  alpha_CD =30, 
                  buffer_time = 4): 
         '''
@@ -78,6 +78,10 @@ class ecd_pulse_single_mode:
         '''
         Loads betas, thetas, phis
         '''
+        print(self.param_file)
+        if type(self.param_file) is not str: 
+            self.betas, self.phis, self.thetas = None, None, None
+            return None
         params = np.loadtxt(self.param_file)
         self.betas = np.asarray([complex(params[0][i], params[1][i]) for i in range(len(params[0]))])
         self.phis = params[2]
