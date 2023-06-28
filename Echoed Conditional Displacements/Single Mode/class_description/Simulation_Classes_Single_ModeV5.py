@@ -1,6 +1,6 @@
 from Simplified_ECD_pulse_constructionV2 import *
 import numpy as np
-
+import h5py as hf
 # V3: corrected dephaing term to have time dependent amplitude.
 # V4: Add thermal noise
 #print('hi')
@@ -82,10 +82,31 @@ class ecd_pulse_single_mode:
         if type(self.param_file) is not str: 
             self.betas, self.phis, self.thetas = None, None, None
             return None
+        
+        ## Text file code
         params = np.loadtxt(self.param_file)
         self.betas = np.asarray([complex(params[0][i], params[1][i]) for i in range(len(params[0]))])
         self.phis = params[2]
         self.thetas = params[3]
+
+        ## H5 file format
+#         filename = self.param_file
+#         file = hf.File(filename, "r")
+#         timestamp = list(file.keys())[-1]
+#         fids = file[timestamp]['fidelities'][-1]
+#         print('fidelity for h5 param is ' + str(max(fids)))
+#         best_fid_idx = np.argmax(fids)
+#         print('index of fidelity for h5 param is ' + str(best_fid_idx))
+#         self.betas = file[timestamp]['betas'][-1][best_fid_idx][0]
+#         #self.gammas = file[timestamp]['gammas'][-1][best_fid_idx]
+#         self.phis = file[timestamp]['phis'][-1][best_fid_idx]
+#         #bug in MECD code
+#         (m,n) = self.phis.shape
+#         for m_ in range(m):
+#             for n_ in range(n): 
+#                 self.phis[m_,n_] = self.phis[m_,n_] - (np.pi/2)
+#         self.phis = self.phis[0]
+#         self.thetas = file[timestamp]['thetas'][-1][best_fid_idx][0]
         return None
     
     def get_pulses(self): 

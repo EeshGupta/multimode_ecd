@@ -135,7 +135,7 @@ class multimode_circle_grape_optimal_control:
         for ii in range(self.mmnum): # for each mode 
 
             chi_e_mat = chis_e[ii]*self.Q_projs[1] #chi_e |e><e|
-            chi_f_mat = chis_f[ii]*self.Q_projs[2] # ''f'''f''f'
+            if self.transmon_levels>2 : chi_f_mat = chis_f[ii]*self.Q_projs[2] # ''f'''f''f'
             
             #now making Delta*a^\dagger a but have to account for all other modes being identity
             #mode_ens = np.array([2*np.pi*mm*(mode_freq - 0.5*(mm-1)*kappas[ii]) for mm in np.arange(self.mnum)]) #each level has a diff frequency (if anharmonic i guess)
@@ -146,12 +146,14 @@ class multimode_circle_grape_optimal_control:
                 ret = np.kron(ret,H_m*(ii==m) + self.I_m*(1-(ii==m)))
             H0 += np.kron(self.I_q, ret)                                    #
             
-            H0 += 2* np.pi*(np.kron(chi_e_mat, (self.M_zs[ii])))          # chi a^dag a sigma_z term
-            H0 += 2* np.pi*alpha*(np.kron(chi_e_mat, (self.M_xs[ii])))    # constant real displacement
+            H0 += 2* np.pi*(np.kron(chi_e_mat, (self.adag_s[ii] * self.a_s[ii])))          # chi a^dag a sigma_z term
+            H0 += 2* np.pi*alpha*(np.kron(chi_e_mat, (self.adag_s[ii] + self.a_s[ii])))    # constant real displacement
+            H0 += 2* np.pi*(np.abs(alpha)**2)*(np.kron(chi_e_mat, (self.I_mm)))    # constant real displacement
 
             if self.f_state: 
-                H0 += 2* np.pi*(np.kron(chi_f_mat, (self.M_zs[ii])))          # chi a^dag a sigma_z term
-                H0 += 2* np.pi*alpha*(np.kron(chi_f_mat, (self.M_xs[ii])))    # constant real displacement
+                H0 += 2* np.pi*(np.kron(chi_f_mat, (self.adag_s[ii] * self.a_s[ii])))          # chi a^dag a sigma_z term
+                H0 += 2* np.pi*alpha*(np.kron(chi_f_mat, (self.adag_s[ii] + self.a_s[ii])))    # constant real displacement
+                H0 += 2* np.pi*(np.abs(alpha)**2)*(np.kron(chi_f_mat, (self.I_mm)))    # constant real displacement
 
 
 #         if not self.add_disp_kerr:pass

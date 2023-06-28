@@ -2,6 +2,8 @@ from MECD_pulseV2 import *
 from qutip import *
 import numpy as np
 import h5py as hf
+from scipy import interpolate
+
 
 #V3: changed how angles are loaded 
 #V4: Adding time dependence to collapse operator decay rates
@@ -9,7 +11,8 @@ import h5py as hf
 #V6: Proper cavity dephasing under displaced frame transformations
 #V7: Fidelity computation differs for density matrices and kets
 #V8: Mode Mode coupling (cross kerr) under displaced frame transformation
-#V9: WIth MECD code
+#V9: WIth MECD code and gf ECD
+#V10: With Circle Grape (both ge and gef) compatibility for qutip sim 
 
 class ecd_pulse_multimode: 
     
@@ -218,10 +221,12 @@ class ecd_pulse_multimode:
 #############     Qutip Now   ######################################################
 class qutip_sim_multimode:
     
-    def __init__(self, n_q, n_c, N_modes, 
-                 is_gf = False, chis = None,
+    def __init__(self, n_q, n_c, N_modes, method = 'ecd', # or 'cgrape'
+                 version= 'ge', # or gef or gf
+                 chis = None,
                  alphas = [], qubit_pulse = [],
                  sim_params = None, save_states = False, 
+                 filename = '',
                  states_filename = 'states store'):
         '''
         n_q, n_c = # of levels in qubit, cavity
@@ -238,13 +243,18 @@ class qutip_sim_multimode:
         self.n_q = n_q
         self.n_c = n_c
         self.N_modes = N_modes
+        self.version = version
+        self.method = method
+        self.filename = filename # for the parameters
         
         self.chis =  [np.array([0, -33, -66]) * 2 * np.pi * (10**(-6)) for _ in range(N_modes)] # Alec's params
+        self.detuning = [0.005 * 2 * np.pi  for _ in range(N_modes)] # all modes have 5 MHz of detuning
         self.qubit_anh = 150*2*np.pi*(10**(-3)) # units of ghz
         
         ##get pulses
-        self.alphas = alphas
-        self.qubit_pulse = qubit_pulse
+        # self.alphas = alphas
+        # self.qubit_pulse = qubit_pulse
+        self.load_pulse()
         
         
         self.get_basic_ops()
@@ -253,18 +263,96 @@ class qutip_sim_multimode:
         #get operators
         
         ##H0 is identity
-        self.H0 = tensor( self.identity_q , self.identity_mms ) # time independent part
+        self.H0 = 0 * tensor( self.identity_q , self.identity_mms ) # time independent part
         
         
         ## drive terms (ecd pulses)
         self.Hd = []
-        self.initialize_ECD_and_qubit_drive(is_gf)
+        self.initialize_ECD_and_qubit_drive() #is_gf)
         
         self.c_ops = []
         self.states_filename = states_filename
         self.save_states= save_states
         
-    
+    def load_pulse(self ):
+        '''
+        Returns qubit and alpha(t)
+        '''
+        # Two arrays for qubit pulse: 
+        '''
+        In ECD, [1] stores real and [2] stores imag
+        In CGrape, [1] stores X, and [2] stores Y
+        '''
+        self.qubit_pulse1 = [[] for _ in range(self.n_q)]
+        self.qubit_pulse2 = [[] for _ in range(self.n_q)]
+        self.alphas = [[] for _ in range(self.N_modes)]
+
+        self.qubit_pulse1[0].append([])   # no such thing as sigma_x_gg
+        self.qubit_pulse2[0].append([])
+        self.qubit_pulse1[1].append([])   # no such thing as sigma_x_eg # will only consider ge
+        self.qubit_pulse2[1].append([])
+        self.qubit_pulse1[1].append([])   # no such thing as sigma_x_ee
+        self.qubit_pulse2[1].append([])
+
+        if self.method == 'cgrape': 
+            pulses = self.interpolate_circ_grape_pulses()
+            #return pulses
+
+            time_steps= len(pulses[0])
+            self.alphas = np.array([np.array([30 for _ in range(time_steps)]) for __ in range(self.N_modes)])
+
+            self.qubit_pulse1[0].append(pulses[0])   # sigma_x_ge
+            self.qubit_pulse2[0].append(pulses[1])
+
+            if self.version == 'gef':
+                self.qubit_pulse1[1].append(pulses[2])   # sigma_x_ef
+                self.qubit_pulse2[1].append(pulses[3])
+
+
+        if self.method == 'ecd': 
+
+            pulse_sim = ecd_pulse_multimode(param_file = self.filename,
+                              kappa = [0,0],
+                               N_modes= 1, 
+                               is_gf = True)
+            pulse_sim.get_pulses()
+            self.alphas = pulse_sim.alpha
+
+            if self.version == 'ge':
+                self.qubit_pulse1[0].append(np.conjugate(pulse_sim.qubit_dac_pulse_GHz))
+                self.qubit_pulse2[0].append(pulse_sim.qubit_dac_pulse_GHz)
+            else: 
+                self.qubit_pulse1[0].append([])
+                self.qubit_pulse1[0].append([])
+
+            if self.version == 'gf':
+                self.qubit_pulse1[0].append(np.conjugate(pulse_sim.qubit_dac_pulse_GHz))
+                self.qubit_pulse2[0].append(pulse_sim.qubit_dac_pulse_GHz)
+            #else: self.qubit_pulse[0].append([])
+
+    def interpolate_circ_grape_pulses(self):
+        '''
+        Copied from Vatsan's Circ Grape Notebook
+        '''
+        fine_pulses = []
+        #num_ops = #len(self.controlHs())
+        f = hf.File(self.filename, 'r')
+        num_ops = len(f['uks'][-1])
+        total_time = f['total_time'][()]
+        steps = f['steps'][()]
+        dt = float(total_time) / steps
+        fine_steps = total_time * 1 #self.SAMPLE_RATE =1 ns
+        base_times = np.arange(steps + 1) * total_time / steps
+        tlist = np.arange(fine_steps + 1) * total_time / fine_steps
+        for i in range(num_ops):
+            base_pulse = f['uks'][-1][i]  # final control pulse
+            base_pulse = np.append(base_pulse, 0.0)  # add extra 0 on end of pulses for interpolation
+            interpFun = interpolate.interp1d(base_times, base_pulse)
+            pulse_interp = interpFun(tlist)
+            fine_pulses.append(pulse_interp)
+
+        return fine_pulses
+
     def get_basic_ops(self): 
         '''
         Creates identity, creation/annihilation for qubit/cavity
@@ -284,9 +372,30 @@ class qutip_sim_multimode:
         # Transmon state projection operators
         self.t_states = [ basis( self.n_q, j ) * (basis( self.n_q, j).dag()) for j in range(self.n_q)]
         
-        # Transmon Drive operators 
-        self.sigma_ge = basis(self.n_q, 0) * basis(self.n_q, 1).dag()
-        self.sigma_gf = basis(self.n_q, 0) * basis(self.n_q, 2).dag()
+        #Transmon Sigma Matrices  (For Grape Code)
+
+        #Sigma_x matrices 
+        self.Q_sigmaXs = [] # sigma x for [[gg, ge, gf, ..], [eg, ee, ef, ..], ..]..
+        zeroes = np.zeros((self.n_q, self.n_q))
+        for num1 in range(0, self.n_q): 
+            arr = []
+            for num2 in range(0,self.n_q):
+                sigma_x = zeroes.copy()
+                sigma_x[num1, num2] = 1
+                sigma_x[num2, num1] = 1
+                arr.append(Qobj(sigma_x))
+            self.Q_sigmaXs.append(arr)
+        #print('loaded sigma Xs')
+        #Sigma_y matrices 
+        self.Q_sigmaYs = [] 
+        for num1 in range(0, self.n_q): 
+            arr = []
+            for num2 in range(0,self.n_q):
+                sigma_y = zeroes.copy()
+                sigma_y[num2, num1] = 1      # assume num2>num1
+                sigma_y[num1, num2] = -1
+                arr.append(Qobj( (0+1j)* sigma_y))
+            self.Q_sigmaYs.append(arr)
 
         # Multimode Identity Operator
         self.identity_mms = self.identity_c
@@ -318,42 +427,67 @@ class qutip_sim_multimode:
         
         return None
     
-    def initialize_ECD_and_qubit_drive(self, is_gf = False): 
+    def initialize_ECD_and_qubit_drive(self): 
         '''
         Adds the initial ECD time dependent displacement terms and qubit_drive to ham
         '''
         # first qubit drive 
-        if not is_gf:
-            print('no gf')
-            self.Hd.append(  [tensor(self.sigma_ge, self.identity_mms), np.conjugate(self.qubit_pulse)] )  
-            self.Hd.append(  [tensor(self.sigma_ge.dag(), self.identity_mms), self.qubit_pulse ])
-                          
-        else:
-            print('gf')
-            self.Hd.append(  [tensor(self.sigma_gf, self.identity_mms), np.conjugate(self.qubit_pulse) ]) 
-            self.Hd.append(  [tensor(self.sigma_gf.dag(), self.identity_mms), self.qubit_pulse ])
-         
-        
+
+        for t in range(self.n_q - 1): 
+            for t_ in range(self.n_q):
+
+                if t_<=t: continue
+
+                #rules for diff mode (mode means whether ge, gf or gef .. like version)
+                if self.version == 'ge' and ((t == 2) or (t_ == 2)): continue # ignore f 
+                if self.version == 'gf' and ((t == 1) or (t_ == 1)): continue # ignore e
+                if self.version == 'gef' and ((t == 0) and (t_ == 2)): continue # ignore gf
+
+                if self.method == 'ecd':
+                    self.Hd.append([tensor(basis(self.n_q, t) * basis(self.n_q, t_).dag(),
+                                            self.identity_mms), 
+                                    self.qubit_pulse1[t][t_]] )  
+                    
+                    self.Hd.append([tensor(basis(self.n_q, t_) * basis(self.n_q, t).dag(),
+                                            self.identity_mms), 
+                                            self.qubit_pulse2[t][t_] ])
+                if self.method == 'cgrape':
+                    print('cgrape')
+                    # print(t)
+                    # print(t_)
+                    self.Hd.append([tensor(self.Q_sigmaXs[t][t_],
+                                            self.identity_mms), 
+                                    self.qubit_pulse1[t][t_]] )  
+                    
+                    self.Hd.append([tensor(self.Q_sigmaYs[t][t_],
+                                            self.identity_mms), 
+                                            self.qubit_pulse2[t][t_] ])
+          
+        # Detuning added if only circ grape
+        if self.method == 'cgrape': 
+            for m in range(self.N_modes): 
+                self.H0+= self.detuning[m] * tensor(self.identity_q, self.adag_mms[m] * self.a_mms[m])
+
         # ecd pulses
-        for t in range(self.n_c):
+        for t in range(self.n_q):
             
-            if is_gf and t == 1: continue  # skip chi_e  terms (cuz assume e state not populated)
-            
-            if not is_gf and t == 2: continue  # skip chi_f  terms (cuz assume f state not populated)
+            if self.version == 'gf' and t == 1: continue  # skip chi_e  terms (cuz assume e state not populated)
+            if self.version == 'ge' and t == 2: continue  # skip chi_f  terms (cuz assume f state not populated)
                               
             for m in range(self.N_modes):
-                 print(t)
+                 #print(t)
                  ## Bare Dispersive shift
                  self.H0 += self.chis[m][t] * tensor( self.t_states[t] , self.adag_mms[m] * self.a_mms[m] )
-                              
-                 ## Conditional Displacement Term
+
+                 print(self.chis[m][t] * tensor( self.t_states[t] , self.adag_mms[m] * self.a_mms[m] ))             
+                 #Conditional Displacement Term
                  self.Hd.append( [(self.chis[m][t]) * tensor( self.t_states[t] , self.a_mms[m] ),
                                   np.conjugate(self.alphas[m])] )
                     
                  self.Hd.append( [(self.chis[m][t]) * tensor( self.t_states[t] , self.adag_mms[m] ),
-                                  self.alphas[m] ] )
+                                  self.alphas[m]] )
                  
-                 ## Stark Shift
+                #  ## Stark Shift
                  self.Hd.append( [self.chis[m][t] * tensor(self.t_states[t], self.identity_mms), 
                                  self.square_list( self.alphas[m] )] )
         return None
@@ -367,138 +501,138 @@ class qutip_sim_multimode:
         return np.real( [np.real(i)**2 + np.imag(i)**2 for i in listy])
     
 
-    # def add_mode_mode_coupling(self, eta = None):
-    #     '''
-    #     Add mode mode coupling term or cross kerr interaction
+    def add_mode_mode_coupling(self, eta = None):
+        '''
+        Add mode mode coupling term or cross kerr interaction
 
-    #     cross kerr = sqrt(kerr_mode1  * kerr_mode2) = chi1 * chi2 /anharmonicity of qubit
-    #     '''
-    #     eta = self.chi1*self.chi2/self.qubit_anh   
-    #     print('V8 mode-mode coupling')
+        cross kerr = sqrt(kerr_mode1  * kerr_mode2) = chi1 * chi2 /anharmonicity of qubit
+        '''
+        eta = self.chi1*self.chi2/self.qubit_anh   
+        print('V8 mode-mode coupling')
         
-    #     #a^dag a 
+        #a^dag a 
         
-    #     ## bdag b
-    #     self.H0+= eta*tensor(self.identity_q, self.num_c, self.num_c)
-    #     ## beta * bdag
-    #     term = tensor(self.identity_q, self.num_c, self.adag_c)
-    #     self.Hd.append(
-    #         [eta * term, self.alpha2 ]
-    #     )
-    #     ## beta* * b
-    #     term = tensor(self.identity_q, self.num_c, self.a_c)
-    #     self.Hd.append(
-    #         [eta * term, np.conjugate(self.alpha2 )]
-    #     )
-    #     ## |beta|^2
-    #     term = tensor(self.identity_q, self.num_c, self.identity_c)
-    #     self.Hd.append(
-    #         [eta * term, np.array([(np.abs(amp))**2 for amp in self.alpha2])]
-    #     )
+        ## bdag b
+        self.H0+= eta*tensor(self.identity_q, self.num_c, self.num_c)
+        ## beta * bdag
+        term = tensor(self.identity_q, self.num_c, self.adag_c)
+        self.Hd.append(
+            [eta * term, self.alpha2 ]
+        )
+        ## beta* * b
+        term = tensor(self.identity_q, self.num_c, self.a_c)
+        self.Hd.append(
+            [eta * term, np.conjugate(self.alpha2 )]
+        )
+        ## |beta|^2
+        term = tensor(self.identity_q, self.num_c, self.identity_c)
+        self.Hd.append(
+            [eta * term, np.array([(np.abs(amp))**2 for amp in self.alpha2])]
+        )
         
-    #     #a^dag alpha 
+        #a^dag alpha 
         
-    #     ## bdag b
-    #     term = tensor(self.identity_q, self.adag_c, self.num_c)
-    #     self.Hd.append(
-    #         [eta * term, self.alpha1 ]
-    #     )
-    #     ## beta * bdag
-    #     term = tensor(self.identity_q, self.adag_c, self.adag_c)
-    #     self.Hd.append(
-    #         [eta * term, np.array([amp1 * amp2 for amp1, amp2 in zip(self.alpha1, self.alpha2) ])]
-    #     )
-    #     ## beta* * b
-    #     term = tensor(self.identity_q, self.adag_c, self.a_c)
-    #     self.Hd.append(
-    #         [eta * term, 
-    #         np.array( [amp1 * amp2 for amp1, amp2 in zip(self.alpha1, np.conjugate(self.alpha2)) ])]
-    #     )
-    #     ## |beta|^2
-    #     term = tensor(self.identity_q,self.adag_c, self.identity_c)
-    #     self.Hd.append(
-    #         [eta * term, 
-    #          np.array([amp1 * amp2 for amp1, amp2 in zip(self.alpha1, 
-    #                                             [(np.abs(amp))**2 for amp in self.alpha2]
-    #                                            ) ])]
-    #                 )
-    #     #a alpha ^*
+        ## bdag b
+        term = tensor(self.identity_q, self.adag_c, self.num_c)
+        self.Hd.append(
+            [eta * term, self.alpha1 ]
+        )
+        ## beta * bdag
+        term = tensor(self.identity_q, self.adag_c, self.adag_c)
+        self.Hd.append(
+            [eta * term, np.array([amp1 * amp2 for amp1, amp2 in zip(self.alpha1, self.alpha2) ])]
+        )
+        ## beta* * b
+        term = tensor(self.identity_q, self.adag_c, self.a_c)
+        self.Hd.append(
+            [eta * term, 
+            np.array( [amp1 * amp2 for amp1, amp2 in zip(self.alpha1, np.conjugate(self.alpha2)) ])]
+        )
+        ## |beta|^2
+        term = tensor(self.identity_q,self.adag_c, self.identity_c)
+        self.Hd.append(
+            [eta * term, 
+             np.array([amp1 * amp2 for amp1, amp2 in zip(self.alpha1, 
+                                                [(np.abs(amp))**2 for amp in self.alpha2]
+                                               ) ])]
+                    )
+        #a alpha ^*
         
-    #     ## bdag b
-    #     term = tensor(self.identity_q, self.a_c, self.num_c)
-    #     self.Hd.append(
-    #         [eta * term, np.conjugate(self.alpha1 )]
-    #     )
-    #     ## beta * bdag
-    #     term = tensor(self.identity_q, self.a_c, self.adag_c)
-    #     self.Hd.append(
-    #         [eta * term, np.array([amp1 * amp2 for amp1, amp2 in zip(np.conjugate(self.alpha1 ), 
-    #                                                         self.alpha2) ])]
-    #     )
-    #     ## beta* * b
-    #     term = tensor(self.identity_q, self.a_c, self.a_c)
-    #     self.Hd.append(
-    #         [eta * term, 
-    #          np.array([amp1 * amp2 for amp1, amp2 in zip(np.conjugate(self.alpha1 ),
-    #                                             np.conjugate(self.alpha2)) ])]
-    #     )
-    #     ## |beta|^2
-    #     term = tensor(self.identity_q, self.a_c, self.identity_c)
-    #     self.Hd.append(
-    #         [eta * term, 
-    #          np.array([amp1 * amp2 for amp1, amp2 in zip(np.conjugate(self.alpha1 ), 
-    #                                             [(np.abs(amp))**2 for amp in self.alpha2]
-    #                                            ) ])]
-    #                 )
+        ## bdag b
+        term = tensor(self.identity_q, self.a_c, self.num_c)
+        self.Hd.append(
+            [eta * term, np.conjugate(self.alpha1 )]
+        )
+        ## beta * bdag
+        term = tensor(self.identity_q, self.a_c, self.adag_c)
+        self.Hd.append(
+            [eta * term, np.array([amp1 * amp2 for amp1, amp2 in zip(np.conjugate(self.alpha1 ), 
+                                                            self.alpha2) ])]
+        )
+        ## beta* * b
+        term = tensor(self.identity_q, self.a_c, self.a_c)
+        self.Hd.append(
+            [eta * term, 
+             np.array([amp1 * amp2 for amp1, amp2 in zip(np.conjugate(self.alpha1 ),
+                                                np.conjugate(self.alpha2)) ])]
+        )
+        ## |beta|^2
+        term = tensor(self.identity_q, self.a_c, self.identity_c)
+        self.Hd.append(
+            [eta * term, 
+             np.array([amp1 * amp2 for amp1, amp2 in zip(np.conjugate(self.alpha1 ), 
+                                                [(np.abs(amp))**2 for amp in self.alpha2]
+                                               ) ])]
+                    )
         
-    #      #|alpha|^2
+         #|alpha|^2
         
-    #     ## bdag b
-    #     term = tensor(self.identity_q, self.identity_c, self.num_c)
-    #     self.Hd.append(
-    #         [eta * term, np.array([(np.abs(amp))**2 for amp in self.alpha1])]
-    #     )
-    #     ## beta * bdag
-    #     term = tensor(self.identity_q, self.identity_c, self.adag_c)
-    #     self.Hd.append(
-    #         [eta * term, np.array([amp1 * amp2 for amp1, amp2 in zip(
-    #                                 [(np.abs(amp))**2 for amp in self.alpha1], 
-    #                                                         self.alpha2)
-    #                      ])]
-    #     )
-    #     ## beta* * b
-    #     term = tensor(self.identity_q, self.identity_c, self.a_c)
-    #     self.Hd.append(
-    #         [eta * term, 
-    #         np.array( [amp1 * amp2 for amp1, amp2 in zip([(np.abs(amp))**2 for amp in self.alpha1],
-    #                                             np.conjugate(self.alpha2)) ])]
-    #     )
-    #     ## |beta|^2 just constant term
+        ## bdag b
+        term = tensor(self.identity_q, self.identity_c, self.num_c)
+        self.Hd.append(
+            [eta * term, np.array([(np.abs(amp))**2 for amp in self.alpha1])]
+        )
+        ## beta * bdag
+        term = tensor(self.identity_q, self.identity_c, self.adag_c)
+        self.Hd.append(
+            [eta * term, np.array([amp1 * amp2 for amp1, amp2 in zip(
+                                    [(np.abs(amp))**2 for amp in self.alpha1], 
+                                                            self.alpha2)
+                         ])]
+        )
+        ## beta* * b
+        term = tensor(self.identity_q, self.identity_c, self.a_c)
+        self.Hd.append(
+            [eta * term, 
+            np.array( [amp1 * amp2 for amp1, amp2 in zip([(np.abs(amp))**2 for amp in self.alpha1],
+                                                np.conjugate(self.alpha2)) ])]
+        )
+        ## |beta|^2 just constant term
         
-    #     return None
+        return None
         
           
-    # def add_qubit_relaxation(self, T1 = 30e+3):
-    #     '''
-    #     qubit relaxation (T1 in nanoseconds)
-    #     '''
-    #     gamma_relax = 1/T1
-    #     term = np.sqrt(gamma_relax)*tensor(self.a_q, self.identity_c, self.identity_c)
-    #     self.c_ops.append(term)
-    #     return None
+    def add_qubit_relaxation(self, T1 = 30e+3):
+        '''
+        qubit relaxation (T1 in nanoseconds)
+        '''
+        gamma_relax = 1/T1
+        term = np.sqrt(gamma_relax)*tensor(self.a_q, self.identity_c, self.identity_c)
+        self.c_ops.append(term)
+        return None
     
-    # def add_qubit_dephasing(self, T1 = 30e+3, Techo = 50e+3):
-    #     '''
-    #     qubit relaxation (T1, T2 in nanoseconds)
-    #     '''
-    #     gamma_relax = 1/T1
-    #     gamma_echo = 1/Techo
-    #     gamma_phi = gamma_echo - (gamma_relax/2)
-    #     #print(gamma_phi)
+    def add_qubit_dephasing(self, T1 = 30e+3, Techo = 50e+3):
+        '''
+        qubit relaxation (T1, T2 in nanoseconds)
+        '''
+        gamma_relax = 1/T1
+        gamma_echo = 1/Techo
+        gamma_phi = gamma_echo - (gamma_relax/2)
+        #print(gamma_phi)
         
-    #     term = np.sqrt(gamma_phi)*tensor(self.num_q, self.identity_c, self.identity_c)
-    #     self.c_ops.append(term)
-    #     return None
+        term = np.sqrt(gamma_phi)*tensor(self.num_q, self.identity_c, self.identity_c)
+        self.c_ops.append(term)
+        return None
     
     # def add_cavity_relaxation(self, T1_mode1 = 10e+6, T1_mode2 = 10e+6):
     #     '''
@@ -623,53 +757,7 @@ class qutip_sim_multimode:
     #     return None
     
     
-    # def add_cavity_dephasing_for_given_mode_old(self, T1, Techo, alpha, mode_index = 1, thermal = False):
-    #     '''
-    #     Adds dephasing noise for a given mode (transforming the cavity dephosing noise in displaced frame)
-    #     '''
-    #     print('hi')
-    #     gamma_relax= 1/T1
-    #     gamma_echo = 1/Techo
-    #     gamma_phi = gamma_echo - (gamma_relax/2)
-    #     gamma_total = gamma_phi
-        
-    #     if thermal:
-    #         # Adding thermal cntribution
-    #         gamma_qubit = 1/self.T1qubit
-    #         n_thermal_qubit = 1.2    #???   https://arxiv.org/pdf/2010.16382.pdf
-    #         gamma_thermal = gamma_qubit*( 
-    #                             np.real(
-    #                                 np.sqrt(
-    #                                     (1 + (1.0j * self.chi/gamma_qubit))**2
-    #                                     +
-    #                                     (4.0j * self.chi * n_thermal_qubit / gamma_qubit)
-    #                                 )
-    #                                 -
-    #                                 1
-    #                             ) / 2
-    #                             )
-    #         gamma_total += gamma_thermal
-        
-        
-    #     #In transforming a -> a + alpha, the term a^dag a can be broken down as 
-    #     # (a+ alpha)(a^dag + alpha^star) = a^adag + alpha^star * a + alpha* adag + |alpha|^2
-    #     # the latter term can be ignored cuz equal to identity
-    #     if mode_index == 1: 
-    #         term1 = gamma_total*tensor(self.identity_q, self.num_c, self.identity_c)
-    #         term2 = gamma_total*tensor(self.identity_q, self.a_c  , self.identity_c)
-    #         term3 = gamma_total*tensor(self.identity_q, self.adag_c  , self.identity_c)
-    #     else: #mode index = 2
-    #         term1 = gamma_total*tensor(self.identity_q, self.identity_c, self.num_c)
-    #         term2 = gamma_total*tensor(self.identity_q, self.identity_c, self.a_c )
-    #         term3 = gamma_total*tensor(self.identity_q, self.identity_c, self.adag_c)
-        
-    #     #add to collapse operator list
-    #     self.c_ops.append(term1)
-    #     self.c_ops.append([term2, np.conjugate(alpha)]) # adding the time dependent coefficients
-    #     self.c_ops.append([term3, alpha])
-        
-    #     return None
-        
+   
     
     # def add_cavity_dephasing(self, T1_mode1 = 10e+6, Techo_mode1 = 10e+6, T1_mode2 = 10e+6, Techo_mode2 = 10e+6, thermal = None, T_phi = None):
     #     '''
@@ -735,41 +823,35 @@ class qutip_sim_multimode:
         return np.real(result) #result's imag [art should be 0
     
     
-    
-    def plot_populations(self, figname = 'figure'):
+    def plot_populations_single_mode(self, figname = 'figure', title = None):
         '''
         Given output of mesolve, outputs populations with qubit as ground
         '''
-#         if self.save_states:
-#             output_states = qload(self.states_filename)
+        
         output_states = self.output.states
-        
-        
         fig, axs = plt.subplots(2,1, figsize=(10,8))
         probs = []
         times = [k/1000 for k in range(len(output_states))]
-        max_num_levels = 3 # to be shown on the plot
-        
+        max_num_levels = 5 # to be shown on the plot
+
         #qubit grounded
         for i in range(max_num_levels):
-            for j in range(max_num_levels):
-                target = tensor(basis(self.n_q,0), basis(self.n_c1, i), basis(self.n_c2, j))
-                pops = []
-                for k in range(len(output_states)): 
-                    z = self.dot(target ,output_states[k])
-                    pops.append(z)
-                axs[0].plot(times, pops, label = '|g,'+str(i)+',' + str(j)+'>')
-        
+            target = tensor(basis(self.n_q,0), basis(self.n_c, i))
+            pops = []
+            for k in range(len(output_states)): 
+                z = target.overlap(output_states[k])
+                pops.append(z.real**2 + z.imag**2)
+            axs[0].plot(times, pops, label = '|g,'+str(i)+'>')
+
         #qubit excited
         for i in range(max_num_levels):
-            for j in range(max_num_levels):
-                target = tensor(basis(self.n_q,1), basis(self.n_c1, i), basis(self.n_c2, j))
-                pops = []
-                for k in range(len(output_states)): 
-                    z = self.dot(target ,output_states[k])
-                    pops.append(z)
-                axs[1].plot(times, pops, linestyle = '--',  label = '|e,'+str(i)+',' + str(j)+'>')
-                
+            target = tensor(basis(self.n_q,1), basis(self.n_c, i))
+            pops = []
+            for k in range(len(output_states)): 
+                z = target.overlap(output_states[k])
+                pops.append(z.real**2 + z.imag**2)
+            axs[1].plot(times, pops, linestyle = '--',  label = '|e,'+str(i) +'>')
+
         axs[1].set_xlabel(r"Time ($\mu$s)", fontsize = 18)
         axs[1].set_ylabel("Populations", fontsize = 18)
         axs[0].set_ylabel("Populations", fontsize = 18)
@@ -784,4 +866,57 @@ class qutip_sim_multimode:
     #           ncol=3, fancybox=True, shadow=True)   
         axs[0].legend(loc='center left', bbox_to_anchor=(1, 0.5), fontsize = '15')
         axs[1].legend(loc='center left', bbox_to_anchor=(1, 0.5), fontsize = '15')
+        #plt.legend(fontsize = '15')
+        #fig.suptitle(title, fontsize = 15)
+        plt.tight_layout()
+        fig.savefig(figname, dpi = 1000)
+        return None
+#     def plot_populations(self, figname = 'figure'):
+#         '''
+#         Given output of mesolve, outputs populations with qubit as ground
+#         '''
+# #         if self.save_states:
+# #             output_states = qload(self.states_filename)
+#         output_states = self.output.states
+        
+        
+#         fig, axs = plt.subplots(2,1, figsize=(10,8))
+#         probs = []
+#         times = [k/1000 for k in range(len(output_states))]
+#         max_num_levels = 3 # to be shown on the plot
+        
+#         #qubit grounded
+#         for i in range(max_num_levels):
+#             for j in range(max_num_levels):
+#                 target = tensor(basis(self.n_q,0), basis(self.n_c1, i), basis(self.n_c2, j))
+#                 pops = []
+#                 for k in range(len(output_states)): 
+#                     z = self.dot(target ,output_states[k])
+#                     pops.append(z)
+#                 axs[0].plot(times, pops, label = '|g,'+str(i)+',' + str(j)+'>')
+        
+#         #qubit excited
+#         for i in range(max_num_levels):
+#             for j in range(max_num_levels):
+#                 target = tensor(basis(self.n_q,1), basis(self.n_c1, i), basis(self.n_c2, j))
+#                 pops = []
+#                 for k in range(len(output_states)): 
+#                     z = self.dot(target ,output_states[k])
+#                     pops.append(z)
+#                 axs[1].plot(times, pops, linestyle = '--',  label = '|e,'+str(i)+',' + str(j)+'>')
+                
+#         axs[1].set_xlabel(r"Time ($\mu$s)", fontsize = 18)
+#         axs[1].set_ylabel("Populations", fontsize = 18)
+#         axs[0].set_ylabel("Populations", fontsize = 18)
+#         axs[0].tick_params(axis = 'both', which = 'major', labelsize = '15')
+#         axs[0].tick_params(axis = 'both', which = 'minor', labelsize = '15')
+#         axs[1].tick_params(axis = 'both', which = 'major', labelsize = '15')
+#         axs[1].tick_params(axis = 'both', which = 'minor', labelsize = '15')
+#     #     axs[0].set_xticks(fontsize= 10)
+#     #     axs[1].set_yticks(fontsize= 10)
+#     #     axs[0].set_yticks(fontsize= 10)
+#     #     plt.legend(prop={'size': 20},  fontsize = 8, loc='upper center', bbox_to_anchor=(0.5, 1.05),
+#     #           ncol=3, fancybox=True, shadow=True)   
+#         axs[0].legend(loc='center left', bbox_to_anchor=(1, 0.5), fontsize = '15')
+#         axs[1].legend(loc='center left', bbox_to_anchor=(1, 0.5), fontsize = '15')
 
