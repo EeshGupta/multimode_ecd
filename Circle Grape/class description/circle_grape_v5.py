@@ -525,7 +525,7 @@ class multimode_circle_grape_optimal_control:
         
         print("running mesolve for rotating frame")
         
-        tlist_rot, out = self.qutip_mesolve_new(start_state,filename)
+        tlist_rot, out = self.qutip_mesolve(start_state,filename)
         pops= [out.expect[ii] for ii in arange(len(self.e_ops))]
         cutoff = self.qnum*(self.mnum)**self.mmnum
         

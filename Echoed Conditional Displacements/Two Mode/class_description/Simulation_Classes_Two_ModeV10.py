@@ -249,7 +249,7 @@ class qutip_sim_multimode:
         
         #self.chis =  [np.array([0, -33, -66]) * 2 * np.pi * (10**(-6)) for _ in range(N_modes)] # Alec's params
         #self.chis =  [np.array([0, -33, -66]) * 2 * np.pi * (10**(-6)), np.array([0, -35, -66]) * 2 * np.pi * (10**(-6))]
-        self.chis= np.transpose([[0,0], [-4.79148181e-05, -4.41176471e-05], [-8.75366869e-05, -8.08823529e-05]])
+        self.chis= 2 * np.pi * np.transpose([[0,0], [-4.79148181e-05, -4.41176471e-05], [-8.75366869e-05, -8.08823529e-05]])
         self.detuning = [0.005 * 2 * np.pi  for _ in range(N_modes)] # all modes have 5 MHz of detuning
         self.qubit_anh = 150*2*np.pi*(10**(-3)) # units of ghz
         
