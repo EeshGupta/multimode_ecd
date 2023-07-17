@@ -140,7 +140,6 @@ class multimode_circle_grape_optimal_control:
             #now making Delta*a^\dagger a but have to account for all other modes being identity
             #mode_ens = np.array([2*np.pi*mm*(mode_freq - 0.5*(mm-1)*kappas[ii]) for mm in np.arange(self.mnum)]) #each level has a diff frequency (if anharmonic i guess)
             mode_ens = np.array([2*np.pi*mm*(mode_freq - 0.5*(mm-1)*0) for mm in np.arange(self.mnum)])
-            print(mode_ens)
             H_m = np.diag(mode_ens)
             ret = H_m*(ii==0) + self.I_m*(1-(ii==0))
             for m in np.arange(1,self.mmnum):
@@ -152,7 +151,6 @@ class multimode_circle_grape_optimal_control:
             H0 += 2* np.pi*(np.abs(alpha)**2)*(np.kron(chi_e_mat, (self.I_mm)))    # constant real displacement
 
             if self.f_state: 
-                print('f mat included')
                 H0 += 2* np.pi*(np.kron(chi_f_mat, (self.adag_s[ii] * self.a_s[ii])))          # chi a^dag a sigma_z term
                 H0 += 2* np.pi*alpha*(np.kron(chi_f_mat, (self.adag_s[ii] + self.a_s[ii])))    # constant real displacement
                 H0 += 2* np.pi*(np.abs(alpha)**2)*(np.kron(chi_f_mat, (self.I_mm)))    # constant real displacement
@@ -443,7 +441,6 @@ class multimode_circle_grape_optimal_control:
         
         
     def qutip_mesolve_new(self,start_state,filename = None):
-        print('new qutip mesolve')
         if filename is None: 
             filename = self.filename
         ss = np.zeros(self.qnum*(self.mnum)**self.mmnum,dtype=complex)
@@ -525,7 +522,7 @@ class multimode_circle_grape_optimal_control:
         
         print("running mesolve for rotating frame")
         
-        tlist_rot, out = self.qutip_mesolve_new(start_state,filename)
+        tlist_rot, out = self.qutip_mesolve(start_state,filename)
         pops= [out.expect[ii] for ii in arange(len(self.e_ops))]
         cutoff = self.qnum*(self.mnum)**self.mmnum
         

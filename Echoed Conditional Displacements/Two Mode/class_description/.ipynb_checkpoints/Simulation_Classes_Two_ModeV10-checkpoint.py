@@ -304,7 +304,7 @@ class qutip_sim_multimode:
             self.alphas = np.array([np.array([30 for _ in range(time_steps)]) for __ in range(self.N_modes)])
 
             self.qubit_pulse1[0].append(pulses[0])   # sigma_x_ge
-            self.qubit_pulse2[0].append(pulses[1])   # sigma_y_ge
+            self.qubit_pulse2[0].append(pulses[1])
 
             if self.version == 'gef':
                 self.qubit_pulse1[1].append(pulses[2])   # sigma_x_ef
@@ -455,8 +455,8 @@ class qutip_sim_multimode:
                                             self.qubit_pulse2[t][t_] ])
                 if self.method == 'cgrape':
                     print('cgrape')
-                    print(t)
-                    print(t_)
+                    # print(t)
+                    # print(t_)
                     self.Hd.append([tensor(self.Q_sigmaXs[t][t_],
                                             self.identity_mms), 
                                     self.qubit_pulse1[t][t_]] )  
