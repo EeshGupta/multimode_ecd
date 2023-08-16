@@ -203,7 +203,7 @@ class Calculator_gef_ECD():
         return d
 
 
-    def cond_disp_op(self, beta, mode, version):#, use_mod = False):
+    def cond_disp_op(self, beta, mode, version = 'ge'):#, use_mod = False):
         '''
         Returns cond displacement operator for specified real displacement
         '''
@@ -234,22 +234,24 @@ class Calculator_gef_ECD():
         '''
         Returns qubit rotation
         '''
+        #
         phi = phi - (np.pi/2)
         rot = (np.cos(phi)*sigmax()) + (np.sin(phi)*sigmay())
         rot = rot.full() #convert to numpy
         exp = scipy.linalg.expm((-1.0j)*(theta/2)*(rot))
+        #print(exp)
        # exp = (((-1.0j)*(theta/2)*(rot)).expm()).full()
 
         #operator with qutrit
         if version == 'ge':
-            exp_qutrit = [[exp[0][1], exp[0][2], 0],
-                            [exp[1][1], exp[1][2], 0],
+            exp_qutrit = [[exp[0][0], exp[0][1], 0],
+                            [exp[1][0], exp[1][1], 0],
                             [0, 0, 1],]
         
         elif version == 'ef': 
             exp_qutrit = [[1, 0, 0],
-                               [0, exp[0][1], exp[0][2]],
-                             [0, exp[1][1], exp[1][2]],]
+                               [0, exp[0][0], exp[0][1]],
+                             [0, exp[1][0], exp[1][1]],]
 
         exp_kron = np.kron(exp_qutrit, self.identity_mm) 
         return  Qobj(exp_kron)
@@ -283,7 +285,7 @@ class Calculator_gef_ECD():
                 phi = self.phis[m][l]
                 theta = self.thetas[m][l]
 
-                block_ = self.cond_disp_op(beta, mode = m)*self.qubit_rot(phi, theta)
+                block_ = self.cond_disp_op(beta, mode = m)*self.qubit_rot(phi[0], theta[0], version = 'ge')*self.qubit_rot(phi[1], theta[1], version = 'ef')
                 #print(block)
                 block = block*block_
             #print(state)

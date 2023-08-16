@@ -1,5 +1,12 @@
 #V1: Basic ECD for multimode cavities
-#V2: ECD with a qutrit instead of qubit
+#V2: ECD with a qutrit instead of qubit 
+'''
+V2 notes: 
+1. make ancilla 3 level
+2. each layer consists of ge, ef rotations and a ge ECD gate 
+
+Date: August 11, 2023
+'''
 
 #%%
 # note: timestamp can't use "/" character for h5 saving.
@@ -36,6 +43,8 @@ class BatchOptimizer(VisualizationMixin):
         initial_states=None,
         target_states=None,
         N_modes =1 ,
+        N_single_layer = 1,
+        N_ancilla_levels = 2,
         N_multistart=10,
         N_blocks=20,
         term_fid=0.99,  # can set >1 to force run all epochs
@@ -60,11 +69,17 @@ class BatchOptimizer(VisualizationMixin):
         timestamps=[],
         **kwargs
     ):
+        '''
+        N_single layer : if =1 , only adds ge rotation in a single layer; if 2 , adds in both ge and ef ancilla rotations
+        '''
         self.parameters = {
             "optimization_type": optimization_type,
             "N_modes": N_modes,
             "N_multistart": N_multistart,
+            "N_ancilla_levels": N_ancilla_levels,
+            "N_single_layer": N_single_layer,
             "N_blocks": N_blocks,
+            "N_layers":N_blocks, # redundancy
             "term_fid": term_fid,
             "dfid_stop": dfid_stop,
             "no_CD_end": no_CD_end,
@@ -213,6 +228,8 @@ class BatchOptimizer(VisualizationMixin):
         self.identity = tfq.identity(N_cav)
         self.identity_mm = self.multimode_baby_matrices(self.identity, 0)
 
+        self.identity_ancilla_mm_system =tfq.identity(self.parameters['N_ancilla_levels']*
+                                                     (N_cav ** self.parameters['N_modes'] ))
         # Pre-diagonalize and listify
         self.a_mm = []
         self.adag_mm = []
@@ -286,7 +303,10 @@ class BatchOptimizer(VisualizationMixin):
             )
         if phi_mask is None:
             phi_mask = np.ones(
-                shape=(self.parameters['N_modes'], self.parameters["N_blocks"], self.parameters["N_multistart"]),
+                shape=(self.parameters['N_modes'], 
+                       self.parameters["N_blocks"], 
+                       self.parameters["N_single_layer"],
+                       self.parameters["N_multistart"]),
                 dtype=np.float32,
             )
         else:
@@ -295,7 +315,10 @@ class BatchOptimizer(VisualizationMixin):
             )
         if theta_mask is None:
             theta_mask = np.ones(
-                shape=( self.parameters['N_modes'], self.parameters["N_blocks"], self.parameters["N_multistart"]),
+                shape=(self.parameters['N_modes'], 
+                       self.parameters["N_blocks"], 
+                       self.parameters["N_single_layer"],
+                       self.parameters["N_multistart"]),
                 dtype=np.float32,
             )
         else:
@@ -383,30 +406,38 @@ class BatchOptimizer(VisualizationMixin):
         sin = tf.math.sin(Thetas)
 
         # constructing the blocks of the matrix
-        ul = cos 
-        ll = tf.constant(-1j, dtype=tf.complex64)* exp * sin 
-        ur = tf.constant(-1j, dtype=tf.complex64) * exp_dag * sin 
-        lr = cos 
+        ul = cos * self.identity_mm
+        ll = tf.constant(-1j, dtype=tf.complex64)* exp * sin * self.identity_mm
+        ur = tf.constant(-1j, dtype=tf.complex64) * exp_dag * sin * self.identity_mm
+        lr = cos * self.identity_mm
 
-        zeroes = tf.zeros(ul.shape)
-        ones = tf.math.exp(zeroes)
+        zeroes = tf.cast(tf.zeros(ul.shape), dtype = tf.complex64)
 
-        if self.a_levels ==2 : 
+        #creating identity 
+        # orig shape : shape(identity of mulltimode)
+        # new shape: N_layers x N_multistarts x shape(identity of multimode)
+        ones =  tf.stack([self.identity_mm] * self.parameters["N_multistart"])
+        ones =  tf.stack([ones] * self.parameters["N_layers"])
+        # print('shape of zeroes is ')
+        # print(tf.shape(zeroes))
+
+        if self.parameters["N_ancilla_levels"] ==2: 
             return tf.concat([tf.concat([ul, ur], 3), tf.concat([ll, lr], 3)], 2) # normal rotation matrix for qubit 
         
-        elif self.a_levels == 3: # qutrit mode
+        elif self.parameters["N_ancilla_levels"] == 3: # qutrit mode
             
             if version == 'ge':
                 return tf.concat([tf.concat([ul, ur, zeroes], 3), 
                                   tf.concat([ll, lr, zeroes], 3),
-                                  tf.concat([zeroes, zeroes, ones], 3)], 2) # normal rotation matrix for qubit 
+                                  tf.concat([zeroes, zeroes, ones], 3)], 2) # normal rotation matrix for qubit but with 3 levels
             
             elif version == 'ef':
                 return tf.concat([tf.concat([ones, zeroes, zeroes], 3),
                                   tf.concat([zeroes, ul, ur ], 3), 
                                   tf.concat([zeroes, ll, lr], 3),
-                                  ], 2) # normal rotation matrix for qubit 
-        
+                                  ], 2) 
+
+    @tf.function    
     def batch_contruct_singlemode_ECD_operators(
             self, betas_rho, betas_angle, version, mode):
         '''
@@ -427,16 +458,22 @@ class BatchOptimizer(VisualizationMixin):
         ds_g = self.batch_construct_displacement_operators(Bs, mode)
         ds_e = tf.linalg.adjoint(ds_g)
         
-        zeroes = tf.shape(ds_g)
-        ones = tf.math.exp(zeroes)
+        zeroes = tf.cast(tf.zeros( ds_g.shape), dtype = tf.complex64)
+        #creating identity 
+        # orig shape : shape(identity of mulltimode)
+        # new shape: N_layers x N_multistarts x shape(identity of multimode)
+        ones =  tf.stack([self.identity_mm] * self.parameters["N_multistart"])
+        ones =  tf.stack([ones] * self.parameters["N_layers"])
+        # print('shape of zeroes is ')
+        # print(tf.shape(zeroes))
 
         #contructing ECD block
 
-        if self.a_levels == 2: #qubit
+        if self.parameters["N_ancilla_levels"] == 2: #qubit
             return tf.concat([tf.concat([zeroes, ds_e], 3),
                                tf.concat([ds_g, zeroes], 3)], 2) # normal rotation matrix for qubit 
         
-        elif self.a_levels == 3: # qutrit mode
+        elif self.parameters["N_ancilla_levels"] == 3: # qutrit mode
             
             if version == 'ge':
                 return tf.concat([tf.concat([zeroes, ds_e, zeroes], 3), 
@@ -463,18 +500,24 @@ class BatchOptimizer(VisualizationMixin):
         # original indixes :  N_layers xN_single_layerx N_multistart 
         # new indixes :  N_single_layer  x N_layers x N_multistart
         # swap indices 
-        betas_rho = tf.einsum('ijk -> jik', betas_rho)
-        betas_angle = tf.einsum('ijk -> jik', betas_angle)
+        # betas_rho = tf.einsum('ijk -> jik', betas_rho)  # uncomment when adding in ef ECD
+        # betas_angle = tf.einsum('ijk -> jik', betas_angle)
         phis = tf.einsum('ijk -> jik', phis)
         thetas = tf.einsum('ijk -> jik', thetas)
+
+        # print('shape of ecd ops')
+        # print(tf.shape(self.batch_contruct_singlemode_ECD_operators(betas_rho, betas_angle, version = 'ge', mode = mode)))
+
+        # print('shape of rotation ops')
+        # print(tf.shape(self.batch_construct_singlemode_ancilla_rotation(phis[0], thetas[0], version = 'ge')))
         
         mat = tf.cast(
-            self.batch_contruct_singlemode_ECD_operators(betas_rho[1], betas_angle[1], version = 'ef', mode = mode)
-            @ self.batch_construct_singlemode_ancilla_rotation(phis[3], thetas[3], version = 'ef')
-            @ self.batch_construct_singlemode_ancilla_rotation(phis[2], thetas[2], version = 'ge')
-            @ self.batch_contruct_singlemode_ECD_operators(betas_rho[0], betas_angle[0], version = 'ge', mode = mode)
-            @ self.batch_construct_singlemode_ancilla_rotation(phis[1], thetas[1], version = 'ef')
+            # self.batch_contruct_singlemode_ECD_operators(betas_rho[1], betas_angle[1], version = 'ef', mode = mode)
+            # @ self.batch_construct_singlemode_ancilla_rotation(phis[3], thetas[3], version = 'ef')
+            # @ self.batch_construct_singlemode_ancilla_rotation(phis[2], thetas[2], version = 'ge')
+            self.batch_contruct_singlemode_ECD_operators(betas_rho, betas_angle, version = 'ge', mode = mode)
             @ self.batch_construct_singlemode_ancilla_rotation(phis[0], thetas[0], version = 'ge')
+            @ self.batch_construct_singlemode_ancilla_rotation(phis[1], thetas[1], version = 'ef')
             , dtype = tf.complex64)
             
         return mat
@@ -839,7 +882,7 @@ class BatchOptimizer(VisualizationMixin):
                         self.parameters["N_multistart"],
                         self.parameters["N_modes"],
                         self.parameters["N_blocks"], 
-                        self.parameters["N_single_layer"]
+                   #     self.parameters["N_single_layer"]
                     ),
                 )
                 grp.create_dataset(
@@ -906,7 +949,7 @@ class BatchOptimizer(VisualizationMixin):
             beta_scale,
             size=(  self.parameters["N_modes"],
                     self.parameters["N_blocks"], 
-                    self.parameters["N_single_layer"],
+     #               self.parameters["N_single_layer"],
                     self.parameters["N_multistart"],),
         )
         betas_angle = np.random.uniform(
@@ -914,7 +957,7 @@ class BatchOptimizer(VisualizationMixin):
             np.pi,
             size=(  self.parameters["N_modes"],
                     self.parameters["N_blocks"], 
-                    self.parameters["N_single_layer"],
+     #               self.parameters["N_single_layer"],
                     self.parameters["N_multistart"],),
         )
         if self.parameters["include_final_displacement"]:
@@ -999,9 +1042,15 @@ class BatchOptimizer(VisualizationMixin):
         # phis = phis  % (2 * np.pi)
         # thetas = phis  % (2 * np.pi)
 
+        # betas
         # current have shape N_modes x N_blocks x N_multistarts
         # these will have shape N_multistart x N_modes x N_blocks
-        return tf.einsum("nlm->mnl", betas), final_disp.T, tf.einsum("nlm->mnl", phis), tf.einsum("nlm->mnl", thetas)
+        
+        # phis, thetas
+        # current have shape N_modes x N_blocks x N_single_layer x N_multistarts
+        # these will have shape N_multistart x N_modes x N_blocks x N_single_layer
+        
+        return tf.einsum("nlm->mnl", betas), final_disp.T, tf.einsum("nlsm->mnls", phis), tf.einsum("nlsm->mnls", thetas)
 
     def set_tf_vars(self, betas=None, final_disp=None, phis=None,thetas=None):
         # reshaping for N_multistart = 1
