@@ -1061,7 +1061,7 @@ def analytic_CD_ef(epsilon, Omega, chi):
     #     chi_ = (chi[2] - chi[0])
     # else:
     chi_ef = (chi[2] - chi[1])/2
-    chi_g_prime = chi[0] - (( chi[1] + chi[2])/2)
+    chi_g_prime = (chi[0] - (( chi[1] + chi[2])/2))
     
     # New variables to encode chis
     ones = np.array([1 for i in range(len(z))])
@@ -1099,6 +1099,17 @@ def analytic_CD_ef(epsilon, Omega, chi):
     theta_prime_g = theta_g[-1] + correction_g
 
     beta = 2 * (delta_ef[-1])# - delta_f[-1])
+    print('-----------')
+    print('Analytic Values')
+    print('delta_g : ' + str(delta_g[-1]))
+    print('delta_e : ' + str(delta_ef[-1]))
+    print('theta_prime_g : ' + str(theta_prime_g))
+    print('theta_prime_ef : ' + str(theta_prime_ef))
+    print('gamma : ' + str(gamma[-1]))
+    print('phi_g : ' + str(phi_g[-1] * 180 /np.pi) + str(' deg'))
+    print('phi_ef : ' + str(phi_ef[-1] * 180 /np.pi) + str(' deg'))
+    #print('predicted_beta : ' + str(np.abs(-delta_g[-1] + 2*delta_ef[-1])))
+    print('-----------')
 
     # print('--------------------------------------')
     # print({

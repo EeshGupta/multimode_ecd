@@ -595,7 +595,7 @@ class qutip_sim_multimode:
             for m in range(self.N_modes): 
                 self.H0+= self.detuning[m] * tensor(self.identity_q, self.adag_mms[m] * self.a_mms[m])
                 
-        elif self.method == 'ecd': #and self.version =='ge': (assuming cavity always driven at omega_g + omega_2 /2
+        elif self.method == 'ecd': #and self.version =='ge': (assuming cavity always driven at (omega_g + omega_e) /2
             
             for m in range(self.N_modes):
                 

@@ -66,9 +66,10 @@ class ecd_pulse_multimode:
         ## modes
         self.storages_params = storages_params
         
+        #All modes have same parameters
         if storages_params == None: 
             self.storages_params = [{
-                            "chi_kHz": 1e+6 * np.array(chis[0]),  # from ECD paper  #chis (Assume same chis for all modes for now 
+                            "chi_kHz": 1e+6 * np.array(chis[_]),  # from ECD paper  #chis (Assume same chis for all modes for now 
                             "chi_prime_Hz":np.array([0,0,0]),# np.array([0, 1.5, 3]), 
                             "Ks_Hz": 0,
                             "epsilon_m_MHz": 400, 
@@ -358,11 +359,13 @@ class qutip_sim_multimode:
 
             pulse_sim = ecd_pulse_multimode(param_file = self.filename,
                               kappa = [0,0],
-                               N_modes= 1, 
+                               N_modes= self.N_modes, 
                                chis = self.chis/ (2* np.pi),
                                is_gf = False)
             pulse_sim.get_pulses()
             self.alphas = pulse_sim.alpha
+            self.pulse_sim = pulse_sim
+            print('hi')
 
             if self.version == 'ge':
                 self.qubit_pulse1[0].append(np.conjugate(pulse_sim.qubit_dac_pulse_GHz))
@@ -374,6 +377,7 @@ class qutip_sim_multimode:
             if self.version == 'gf':
                 self.qubit_pulse1[0].append(np.conjugate(pulse_sim.qubit_dac_pulse_GHz))
                 self.qubit_pulse2[0].append(pulse_sim.qubit_dac_pulse_GHz)
+            
             #else: self.qubit_pulse[0].append([])
 
     def interpolate_circ_grape_pulses(self):
@@ -519,7 +523,8 @@ class qutip_sim_multimode:
             for m in range(self.N_modes):
                 
                 self.detuning = -1 * ( self.chis[m][0] + self.chis[m][1] ) / 2
-                
+                #self.detuning = -1 * ( self.chis[0][0] + self.chis[0][1] ) / 2 # currently all modes have same chis
+
                 self.H0 += self.detuning * tensor(self.identity_q, self.adag_mms[m] * self.a_mms[m])
                 
                 self.Hd.append( [(self.detuning) * tensor( self.identity_q , self.a_mms[m] ),
@@ -958,7 +963,7 @@ class qutip_sim_multimode:
                 target = tensor(basis(self.n_q,0), basis(self.n_c, i), basis(self.n_c, j))
                 pops = []
                 for k in range(len(output_states)): 
-                    z = self.dot(target ,output_states[k])
+                    z = np.real(self.dot(target ,output_states[k]))
                     pops.append(z)
                 axs[0].plot(times, pops, label = '|g,'+str(i)+',' + str(j)+'>')
         
@@ -968,7 +973,7 @@ class qutip_sim_multimode:
                 target = tensor(basis(self.n_q,1), basis(self.n_c, i), basis(self.n_c, j))
                 pops = []
                 for k in range(len(output_states)): 
-                    z = self.dot(target ,output_states[k])
+                    z = np.real(self.dot(target ,output_states[k]))
                     pops.append(z)
                 axs[1].plot(times, pops, linestyle = '--',  label = '|e,'+str(i)+',' + str(j)+'>')
                 
@@ -986,5 +991,6 @@ class qutip_sim_multimode:
     #           ncol=3, fancybox=True, shadow=True)   
         axs[0].legend(loc='center left', bbox_to_anchor=(1, 0.5), fontsize = '15')
         axs[1].legend(loc='center left', bbox_to_anchor=(1, 0.5), fontsize = '15')
+        return fig
 
 print('hi')
