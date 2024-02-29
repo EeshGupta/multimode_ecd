@@ -262,6 +262,7 @@ def conditional_displacement(
     output=False,
 ):
     print('Modified conditional displacement called')
+    print('alpha is %.2f' % alpha)
     beta = float(beta) if isinstance(beta, int) else beta
     alpha = float(alpha) if isinstance(alpha, int) else alpha
     chi = 2 * np.pi * 1e-6 * storage.chi_kHz

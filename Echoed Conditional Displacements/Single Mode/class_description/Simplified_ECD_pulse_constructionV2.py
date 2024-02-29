@@ -71,7 +71,7 @@ class FakeStorage:
         chi_kHz=-30.0,
         chi_prime_Hz=1.0,
         Ks_Hz=-2.0,
-        epsilon_m_MHz=400.0,
+        #epsilon_m_MHz=400.0,
         T1_us=340.0,
         unit_amp=0.05,
         sigma=15,
@@ -81,7 +81,7 @@ class FakeStorage:
         self.chi_kHz = chi_kHz
         self.chi_prime_Hz = chi_prime_Hz
         self.Ks_Hz = Ks_Hz
-        self.epsilon_m_MHz = epsilon_m_MHz
+        #self.epsilon_m_MHz = epsilon_m_MHz
         self.max_dac = max_dac
         self.T1_us = T1_us
 
@@ -262,6 +262,7 @@ def conditional_displacement(
     output=False,
 ):
     print('Modified conditional displacement called')
+    print('alpha is %.2f' % alpha)
     beta = float(beta) if isinstance(beta, int) else beta
     alpha = float(alpha) if isinstance(alpha, int) else alpha
     chi = 2 * np.pi * 1e-6 * storage.chi_kHz
